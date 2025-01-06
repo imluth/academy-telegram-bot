@@ -2,9 +2,16 @@ version: '3.8'
 
 services:
   telegram-bot:
-    build: .
-    restart: always
+    image: imrooot/academy-telegram-bot:latest
+    container_name: telegram-bot
+    restart: unless-stopped
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     volumes:
-      - .env:/app/.env
+      - ./logs:/app/logs
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
