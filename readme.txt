@@ -15,6 +15,9 @@ docker run -d --name bs-academy-bot --env-file .env  academy-telegram-bot
 
 ===================================
 
+#login to docker
+docker login
+
 #tag docker image
 docker tag academy-telegram-bot:latest imrooot/academy-bot:v4.5
 
