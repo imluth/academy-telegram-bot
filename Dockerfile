@@ -1,32 +1,35 @@
-# Use an official Python runtime as a parent image
-FROM python:3.9-slim
+# Stage 1: Build stage
+FROM python:3.9-slim as builder
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install only the necessary build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libssl-dev \
-    libffi-dev \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN pip install --upgrade pip
-
-# Copy the requirements file into the container
+# Upgrade pip and install dependencies
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Stage 2: Runtime stage
+FROM python:3.9-slim
 
-# Copy the rest of the application's code
-COPY . .
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
-# Run the bot when the container launches
-CMD ["python", "team_bot_v4.5.py"]
+WORKDIR /app
+
+# Copy only the necessary files from builder
+COPY --from=builder /usr/local/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
+
+# Copy application code
+COPY team_bot.py .
+
+CMD ["python", "team_bot.py"]
