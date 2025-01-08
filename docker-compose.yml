@@ -6,8 +6,6 @@ services:
     container_name: football-play-bot
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-    volumes:
-      - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "ps", "aux", "|", "grep", "python"]
