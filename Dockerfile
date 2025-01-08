@@ -34,7 +34,7 @@ COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
 # Copy application code and .env file
 COPY team_bot.py .
-COPY .env .
+#COPY .env .
 
 # Create a non-root user
 RUN useradd -m botuser && \
