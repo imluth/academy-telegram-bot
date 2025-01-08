@@ -37,10 +37,10 @@ COPY team_bot.py .
 #COPY .env .
 
 # Create a non-root user
-RUN useradd -m botuser && \
-    chown -R botuser:botuser /app
+#RUN useradd -m botuser && \
+#    chown -R botuser:botuser /app
 
 # Switch to non-root user
-USER botuser
+#USER botuser
 
 CMD ["python", "team_bot.py"]
