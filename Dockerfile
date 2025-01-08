@@ -25,11 +25,22 @@ ENV PYTHONUNBUFFERED 1
 
 WORKDIR /app
 
+# Create logs directory and set permissions
+RUN mkdir -p /app/logs && chmod 777 /app/logs
+
 # Copy only the necessary files from builder
 COPY --from=builder /usr/local/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
-# Copy application code
+# Copy application code and .env file
 COPY team_bot.py .
+COPY .env .
+
+# Create a non-root user
+RUN useradd -m botuser && \
+    chown -R botuser:botuser /app
+
+# Switch to non-root user
+USER botuser
 
 CMD ["python", "team_bot.py"]
