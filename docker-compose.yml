@@ -8,7 +8,7 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'python team_bot.py' || exit 1"]
+      test: ["CMD", "python", "-c", "import os, sys; sys.exit(0 if any(p.name() == 'team_bot.py' for p in __import__('psutil').process_iter(['name'])) else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
