@@ -3,7 +3,7 @@ services:
     build: 
       context: .
       dockerfile: Dockerfile
-    container_name: academy-bot
+    container_name: academy-bot-v2
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     restart: unless-stopped
