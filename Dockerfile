@@ -26,19 +26,20 @@ ENV PYTHONUNBUFFERED 1
 
 WORKDIR /app
 
-# Create a non-root user first
-RUN useradd -m botuser && \
+# Create a non-root user with explicit UID/GID
+RUN groupadd -r botgroup -g 1001 && \
+    useradd -r -u 1001 -g botgroup -m botuser && \
     mkdir -p /app/logs && \
-    chown -R botuser:botuser /app && \
+    chown -R botuser:botgroup /app && \
     chmod -R 755 /app && \
-    chmod -R 777 /app/logs
+    chmod 777 /app/logs
 
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
 # Copy application code
-COPY --chown=botuser:botuser . /app/
+COPY --chown=botuser:botgroup . /app/
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
