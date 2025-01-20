@@ -7,6 +7,7 @@ __pycache__/
 
 # Old program versions
 /old_versions
+docker-compose_local.yml
 
 # Misc
 readme.txt

@@ -1,13 +1,11 @@
-# Stage 1: Build stage
 FROM python:3.9-slim as builder
 
-# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
 WORKDIR /app
 
-# Install only the necessary build dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
@@ -16,12 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements first
 COPY requirements.txt .
 
-# Install requirements with specific versions
+# Install requirements
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip list  # Print installed packages for verification
+    pip install --no-cache-dir -r requirements.txt
 
-# Stage 2: Runtime stage
+# Runtime stage
 FROM python:3.9-slim
 
 ENV PYTHONDONTWRITEBYTECODE 1
@@ -29,7 +26,7 @@ ENV PYTHONUNBUFFERED 1
 
 WORKDIR /app
 
-# Create logs directory and set permissions
+# Create logs directory
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
 # Copy installed packages from builder
@@ -43,10 +40,16 @@ COPY . /app/
 RUN useradd -m botuser && \
     chown -R botuser:botuser /app
 
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    redis-tools \
+    && rm -rf /var/lib/apt/lists/*
+
 # Switch to non-root user
 USER botuser
 
-# Verify installations
-RUN python -c "import telegram; import dotenv; import psutil; print('All dependencies verified')"
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import socket; socket.socket().connect(('redis', 6379))" || exit 1
 
-CMD ["python", "team_bot_v2.py"]
+CMD ["python", "team_bot.py"]
