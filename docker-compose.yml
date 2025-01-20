@@ -16,7 +16,7 @@ services:
       - bot_network
       - traefik-public
     labels:
-      - "traefik.enable=false"  # Redis should not be exposed
+      - "traefik.enable=false"
     restart: unless-stopped
     deploy:
       resources:
@@ -24,6 +24,12 @@ services:
           memory: 256M
         reservations:
           memory: 128M
+
+  init-logs:
+    image: busybox
+    command: /bin/sh -c "mkdir -p /app/logs && chmod -R 777 /app/logs"
+    volumes:
+      - bot_logs:/app/logs
 
   football-bot:
     build: 
@@ -34,11 +40,14 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - REDIS_URL=redis://redis:6379
       - LOG_DIR=/app/logs
+      - TZ=Asia/Male
     volumes:
-      - ./logs:/app/logs
+      - bot_logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
+      init-logs:
+        condition: service_completed_successfully
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -49,7 +58,7 @@ services:
       - bot_network
       - traefik-public
     labels:
-      - "traefik.enable=false"  # Bot doesn't need HTTP exposure
+      - "traefik.enable=false"
     deploy:
       resources:
         limits:
@@ -60,6 +69,8 @@ services:
 volumes:
   redis_data:
     name: football-bot-redis-data
+  bot_logs:
+    name: football-bot-logs
 
 networks:
   bot_network:

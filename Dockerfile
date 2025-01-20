@@ -23,16 +23,24 @@ FROM python:3.9-slim
 
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
+ENV TZ=Asia/Male
+
+# Set up timezone
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
+    redis-tools \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Create a non-root user with explicit UID/GID
-RUN groupadd -r botgroup -g 1001 && \
-    useradd -r -u 1001 -g botgroup -m botuser && \
-    mkdir -p /app/logs && \
-    chown -R botuser:botgroup /app && \
-    chmod -R 755 /app && \
-    chmod 777 /app/logs
+# Set up user and directories with root permissions
+RUN mkdir -p /app/logs && \
+    chmod 777 /app/logs && \
+    groupadd -r botgroup && \
+    useradd -r -g botgroup -d /app botuser && \
+    chown -R botuser:botgroup /app
 
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
@@ -40,11 +48,6 @@ COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
 # Copy application code
 COPY --chown=botuser:botgroup . /app/
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    redis-tools \
-    && rm -rf /var/lib/apt/lists/*
 
 # Switch to non-root user
 USER botuser
