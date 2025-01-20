@@ -29,7 +29,7 @@ services:
     build: 
       context: .
       dockerfile: Dockerfile
-    container_name: academy-bot-v2
+    container_name: academy-bot-v3
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - REDIS_URL=redis://redis:6379
