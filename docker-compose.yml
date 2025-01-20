@@ -40,11 +40,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    user: root  # Temporarily run as root to ensure permissions
+    user: root
     entrypoint: >
       /bin/sh -c "
       mkdir -p /app/logs &&
       chmod -R 777 /app/logs &&
+      groupadd -r botgroup &&
+      useradd -r -g botgroup -d /app botuser &&
       chown -R botuser:botgroup /app/logs &&
       su botuser -c 'python team_bot.py'
       "
