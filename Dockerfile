@@ -38,17 +38,14 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Set up user and group
-RUN groupadd -r botgroup && \
-    useradd -r -g botgroup -d /app botuser
+# Create logs directory
+RUN mkdir -p /app/logs
 
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
 # Copy application code
-COPY --chown=botuser:botgroup . /app/
+COPY . /app/
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import socket; socket.socket().connect(('redis', 6379))" || exit 1
+CMD ["python", "team_bot.py"]
