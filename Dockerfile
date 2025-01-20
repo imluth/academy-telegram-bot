@@ -25,22 +25,22 @@ ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 ENV TZ=Asia/Male
 
-# Set up timezone
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Set up timezone and required packages
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     tzdata \
     redis-tools \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* && \
+    # Set Python to use the correct timezone
+    pip install --no-cache-dir pytz
 
 WORKDIR /app
 
-# Set up user and directories with root permissions
-RUN mkdir -p /app/logs && \
-    chmod 777 /app/logs && \
-    groupadd -r botgroup && \
-    useradd -r -g botgroup -d /app botuser && \
-    chown -R botuser:botgroup /app
+# Set up user and group
+RUN groupadd -r botgroup && \
+    useradd -r -g botgroup -d /app botuser
 
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
@@ -49,11 +49,6 @@ COPY --from=builder /usr/local/bin/ /usr/local/bin/
 # Copy application code
 COPY --chown=botuser:botgroup . /app/
 
-# Switch to non-root user
-USER botuser
-
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import socket; socket.socket().connect(('redis', 6379))" || exit 1
-
-CMD ["python", "team_bot.py"]

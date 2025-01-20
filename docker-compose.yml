@@ -25,12 +25,6 @@ services:
         reservations:
           memory: 128M
 
-  init-logs:
-    image: busybox
-    command: /bin/sh -c "mkdir -p /app/logs && chmod -R 777 /app/logs"
-    volumes:
-      - bot_logs:/app/logs
-
   football-bot:
     build: 
       context: .
@@ -46,8 +40,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      init-logs:
-        condition: service_completed_successfully
+    user: root  # Temporarily run as root to ensure permissions
+    entrypoint: >
+      /bin/sh -c "
+      mkdir -p /app/logs &&
+      chmod -R 777 /app/logs &&
+      chown -R botuser:botgroup /app/logs &&
+      su botuser -c 'python team_bot.py'
+      "
     restart: unless-stopped
     logging:
       driver: "json-file"
