@@ -45,10 +45,8 @@ services:
       /bin/sh -c "
       mkdir -p /app/logs &&
       chmod -R 777 /app/logs &&
-      groupadd -r botgroup &&
-      useradd -r -g botgroup -d /app botuser &&
       chown -R botuser:botgroup /app/logs &&
-      su botuser -c 'python team_bot.py'
+      su -s /bin/sh botuser -c 'python team_bot.py'
       "
     restart: unless-stopped
     logging:
