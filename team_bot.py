@@ -286,50 +286,56 @@ class FootballPlayBot:
 
     def setup_logging(self):
         """Set up logging configuration with correct timezone"""
-        try:
-            import pytz
-            from datetime import datetime
-            
-            class TimezoneFormatter(logging.Formatter):
-                def converter(self, timestamp):
-                    dt = datetime.fromtimestamp(timestamp)
-                    timezone = pytz.timezone('Indian/Maldives')
-                    return timezone.fromutc(dt.replace(tzinfo=pytz.UTC))
-
-                def formatTime(self, record, datefmt=None):
-                    dt = self.converter(record.created)
-                    if datefmt:
-                        return dt.strftime(datefmt)
-                    return dt.strftime('%Y-%m-%d %H:%M:%S')
-
-            self.logger = logging.getLogger('FootballPlayBot')
-            self.logger.setLevel(logging.INFO)
-            
-            formatter = TimezoneFormatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            
-            # Console handler
-            console_handler = logging.StreamHandler()
-            console_handler.setFormatter(formatter)
-            self.logger.addHandler(console_handler)
-            
-            # File handler
-            log_dir = os.getenv('LOG_DIR', 'logs')
-            os.makedirs(log_dir, exist_ok=True)
-            
-            log_file = os.path.join(
-                log_dir,
-                f"{datetime.now(pytz.timezone('Indian/Maldives')).strftime('%Y-%m-%d')}_football_bot.log"
-            )
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(formatter)
-            self.logger.addHandler(file_handler)
+    try:
+        import pytz
+        from datetime import datetime
+        
+        class TimezoneFormatter(logging.Formatter):
+            def __init__(self, fmt=None, datefmt=None, tz_name='Indian/Maldives'):
+                super().__init__(fmt, datefmt)
+                self.tz = pytz.timezone(tz_name)
                 
-        except Exception as e:
-            print(f"Could not set up logging: {e}")
-            # Set up basic logging as fallback
-            logging.basicConfig(level=logging.INFO)
+            def converter(self, timestamp):
+                dt = datetime.fromtimestamp(timestamp)
+                return dt.astimezone(self.tz)
+
+            def formatTime(self, record, datefmt=None):
+                dt = self.converter(record.created)
+                if datefmt:
+                    return dt.strftime(datefmt)
+                return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        self.logger = logging.getLogger('FootballPlayBot')
+        self.logger.setLevel(logging.INFO)
+        
+        tz_name = 'Indian/Maldives'  # Using the requested timezone
+        formatter = TimezoneFormatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            tz_name=tz_name
+        )
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        self.logger.addHandler(console_handler)
+        
+        # File handler
+        log_dir = os.getenv('LOG_DIR', 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        
+        local_now = datetime.now(pytz.timezone(tz_name))
+        log_file = os.path.join(
+            log_dir,
+            f"{local_now.strftime('%Y-%m-%d')}_football_bot.log"
+        )
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+            
+    except Exception as e:
+        print(f"Could not set up logging: {e}")
+        # Set up basic logging as fallback
+        logging.basicConfig(level=logging.INFO)
     
     async def initialize(self):
         """Initialize bot dependencies and connections"""
