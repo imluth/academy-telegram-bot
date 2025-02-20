@@ -674,6 +674,15 @@ def setup_logging(self):
                           context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Handle player join requests"""
         try:
+            
+            # TEMPORARY DISABLE START - Block +1 joins at the method level
+            if is_plus_one:
+                username = user.username or f"{user.first_name} {user.last_name or ''}".strip()
+                self.logger.info(f"Blocked +1 join attempt by {username} in chat {session.chat_id}")
+                await query.answer("The +1 feature is temporarily disabled", show_alert=True)
+                return False
+            # TEMPORARY DISABLE END
+            
             if len(players) >= self.max_players:
                 self.logger.info(f"Join attempt rejected - list full. User: {user.username}, Chat: {session.chat_id}")
                 await query.answer("Play list is full!", show_alert=True)
