@@ -556,7 +556,7 @@ def setup_logging(self):
             keyboard = [
                 [
                     InlineKeyboardButton("✅ In", callback_data='join_play'),
-                    InlineKeyboardButton("✅+1", callback_data='join_play_plus_one'),
+                   #InlineKeyboardButton("✅+1", callback_data='join_play_plus_one'),
                     InlineKeyboardButton("❌ Out", callback_data='cancel_join')
                 ]
             ]
@@ -841,7 +841,7 @@ def setup_logging(self):
             keyboard = [
                 [
                     InlineKeyboardButton("✅ In", callback_data='join_play'),
-                    InlineKeyboardButton("✅+1", callback_data='join_play_plus_one'),
+                   #InlineKeyboardButton("✅+1", callback_data='join_play_plus_one'),
                     InlineKeyboardButton("❌ Out", callback_data='cancel_join')
                 ]
             ]
