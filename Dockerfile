@@ -23,7 +23,7 @@ FROM python:3.9-slim
 
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
-ENV TZ=Asia/Male
+ENV TZ=Asia/Karachi
 
 # Set up timezone and required packages
 RUN apt-get update && \
