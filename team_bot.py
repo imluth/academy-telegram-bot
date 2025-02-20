@@ -631,7 +631,12 @@ def setup_logging(self):
             if action_type == 'join_play':
                 success = await self._handle_join(session, players, user, False, query, context)
             elif action_type == 'join_play_plus_one':
-                success = await self._handle_join(session, players, user, True, query, context)
+                # TEMPORARY DISABLE START - Revert by removing these 3 lines and uncommenting the line below
+                await query.answer("The +1 feature is temporarily disabled", show_alert=True)
+                self.logger.info(f"Blocked +1 attempt by {user.username} in chat {chat_id}")
+                return
+                # TEMPORARY DISABLE END
+                # success = await self._handle_join(session, players, user, True, query, context)
             elif action_type == 'cancel_join':
                 success = await self._handle_leave(session, players, user, query)
             else:
