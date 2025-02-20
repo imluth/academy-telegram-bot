@@ -305,10 +305,13 @@ class FootballPlayBot:
                     return dt.strftime(datefmt)
                 return dt.strftime('%Y-%m-%d %H:%M:%S')
 
+        tz_name = 'Indian/Maldives'
+        
+        # Initialize logger
         self.logger = logging.getLogger('FootballPlayBot')
         self.logger.setLevel(logging.INFO)
         
-        tz_name = 'Indian/Maldives'  # Using the requested timezone
+        # Create formatter
         formatter = TimezoneFormatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             tz_name=tz_name
@@ -336,6 +339,7 @@ class FootballPlayBot:
         print(f"Could not set up logging: {e}")
         # Set up basic logging as fallback
         logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger('FootballPlayBot')
     
     async def initialize(self):
         """Initialize bot dependencies and connections"""
