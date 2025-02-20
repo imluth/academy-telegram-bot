@@ -293,7 +293,7 @@ class FootballPlayBot:
             class TimezoneFormatter(logging.Formatter):
                 def converter(self, timestamp):
                     dt = datetime.fromtimestamp(timestamp)
-                    timezone = pytz.timezone('Asia/Male')
+                    timezone = pytz.timezone('Asia/Karachi')
                     return timezone.fromutc(dt.replace(tzinfo=pytz.UTC))
 
                 def formatTime(self, record, datefmt=None):
@@ -320,7 +320,7 @@ class FootballPlayBot:
             
             log_file = os.path.join(
                 log_dir,
-                f"{datetime.now(pytz.timezone('Asia/Male')).strftime('%Y-%m-%d')}_football_bot.log"
+                f"{datetime.now(pytz.timezone('Asia/Karachi')).strftime('%Y-%m-%d')}_football_bot.log"
             )
             file_handler = logging.FileHandler(log_file)
             file_handler.setFormatter(formatter)
