@@ -284,52 +284,33 @@ class FootballPlayBot:
             }
         }
 
-def setup_logging(self):
-    """Set up logging configuration with correct timezone"""
-    try:
-        import pytz
-        from datetime import datetime
-        
-        class TimezoneFormatter(logging.Formatter):
-            def converter(self, timestamp):
-                dt = datetime.fromtimestamp(timestamp)
-                timezone = pytz.timezone('Asia/Male')
-                return timezone.fromutc(dt.replace(tzinfo=pytz.UTC))
-
-            def formatTime(self, record, datefmt=None):
-                dt = self.converter(record.created)
-                if datefmt:
-                    return dt.strftime(datefmt)
-                return dt.strftime('%Y-%m-%d %H:%M:%S')
-
+    def setup_logging(self):
+        """Set up logging configuration"""
         self.logger = logging.getLogger('FootballPlayBot')
         self.logger.setLevel(logging.INFO)
         
-        formatter = TimezoneFormatter(
+        formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         
-        # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
         self.logger.addHandler(console_handler)
         
-        # File handler
-        log_dir = os.getenv('LOG_DIR', 'logs')
-        os.makedirs(log_dir, exist_ok=True)
-        
-        log_file = os.path.join(
-            log_dir,
-            f"{datetime.now(pytz.timezone('Asia/Male')).strftime('%Y-%m-%d')}_football_bot.log"
-        )
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
-        self.logger.addHandler(file_handler)
+        try:
+            log_dir = os.getenv('LOG_DIR', 'logs')
+            os.makedirs(log_dir, exist_ok=True)
             
-    except Exception as e:
-        print(f"Could not set up logging: {e}")
-        # Set up basic logging as fallback
-        logging.basicConfig(level=logging.INFO)
+            log_file = os.path.join(
+                log_dir,
+                f"{datetime.now().strftime('%Y-%m-%d')}_football_bot.log"
+            )
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+            
+        except Exception as e:
+            self.logger.warning(f"Could not set up file logging: {e}")
     
     async def initialize(self):
         """Initialize bot dependencies and connections"""
@@ -511,7 +492,6 @@ def setup_logging(self):
                 "start_play"
             )
             if not allowed:
-                self.logger.info(f"Rate limit hit for start_play - User: {user.username}, Chat: {chat_id}")
                 await update.message.reply_text(
                     f"Please wait {wait_time:.1f} seconds before starting a new play list."
                 )
@@ -521,7 +501,6 @@ def setup_logging(self):
             if update.effective_chat.type in ['group', 'supergroup']:
                 member = await context.bot.get_chat_member(chat_id, user.id)
                 if member.status not in ['administrator', 'creator']:
-                    self.logger.warning(f"Unauthorized play start attempt by {user.username} in chat {chat_id}")
                     await update.message.reply_text(
                         "❌ Only group administrators can start a play list."
                     )
@@ -530,7 +509,6 @@ def setup_logging(self):
             # Initialize session
             session = PlaySession(await self.redis_manager.get_redis(), chat_id)
             if await session.is_open():
-                self.logger.info(f"Attempt to start play while session active by {user.username} in chat {chat_id}")
                 await update.message.reply_text(
                     "A play list is already active! Use /cancel\\_play first."
                 )
@@ -539,7 +517,6 @@ def setup_logging(self):
             # Parse play day
             command_args = update.message.text.lower().split()
             if len(command_args) != 2 or command_args[1] not in ['wed', 'sat']:
-                self.logger.info(f"Invalid play day format from {user.username} in chat {chat_id}: {update.message.text}")
                 await update.message.reply_text(
                     "Please use:\n/play Wed\n/play Sat"
                 )
@@ -568,7 +545,7 @@ def setup_logging(self):
                     parse_mode='MarkdownV2'
                 )
                 self.logger.info(
-                    f"Play list started for {play_day} in chat {chat_id} by {user.username}"
+                    f"Play list started for {play_day} in chat {chat_id}"
                 )
             except TelegramError as e:
                 self.logger.error(f"Failed to send initial message: {e}")
@@ -593,7 +570,6 @@ def setup_logging(self):
             # Check rate limit
             allowed, wait_time = await self.rate_limiter.acquire(user.id)
             if not allowed:
-                self.logger.info(f"Rate limit hit for user {user.username} (ID: {user.id}) in chat {chat_id}")
                 await query.answer(
                     f"Please wait {wait_time:.1f} seconds.",
                     show_alert=True
@@ -604,7 +580,6 @@ def setup_logging(self):
             
             # Verify session is active
             if not await session.is_open():
-                self.logger.info(f"Inactive session access attempt by {user.username} in chat {chat_id}")
                 await query.answer("This play list is no longer active.", show_alert=True)
                 try:
                     await query.edit_message_reply_markup(reply_markup=None)
@@ -625,21 +600,18 @@ def setup_logging(self):
 
             # Process action
             success = False
-            action_type = query.data
-            self.logger.info(f"User {user.username} attempting action '{action_type}' in chat {chat_id}")
-            
-            if action_type == 'join_play':
+            if query.data == 'join_play':
                 success = await self._handle_join(session, players, user, False, query, context)
-            elif action_type == 'join_play_plus_one':
+            elif query.data == 'join_play_plus_one':
                 success = await self._handle_join(session, players, user, True, query, context)
-            elif action_type == 'cancel_join':
+            elif query.data == 'cancel_join':
                 success = await self._handle_leave(session, players, user, query)
             else:
                 await query.answer("Invalid action")
                 return
 
-            if success:
-                self.logger.info(f"Action '{action_type}' successful for user {user.username} in chat {chat_id}")
+            if not success:
+                return
 
             # Update message if needed
             if await self.message_debouncer.should_update(query.message.message_id):
@@ -670,7 +642,6 @@ def setup_logging(self):
         """Handle player join requests"""
         try:
             if len(players) >= self.max_players:
-                self.logger.info(f"Join attempt rejected - list full. User: {user.username}, Chat: {session.chat_id}")
                 await query.answer("Play list is full!", show_alert=True)
                 return False
 
@@ -682,7 +653,6 @@ def setup_logging(self):
                 None
             )
             if existing:
-                self.logger.info(f"Duplicate join attempt by {username} in chat {session.chat_id}")
                 await query.answer("You're already on the list!", show_alert=True)
                 return False
 
@@ -694,10 +664,6 @@ def setup_logging(self):
                 join_time=datetime.now()
             )
             players.append(new_player)
-            
-            # Log the join
-            join_type = "+1" if is_plus_one else "regular"
-            self.logger.info(f"Player {username} joined ({join_type}) - Total players: {len(players)} in chat {session.chat_id}")
             
             # Update state
             await session.set_players(players)
@@ -721,11 +687,9 @@ def setup_logging(self):
             players = [p for p in players if p.user_id != user.id]
             
             if len(players) == original_count:
-                self.logger.info(f"Leave attempt by non-listed player {user.username} in chat {session.chat_id}")
                 await query.answer("You're not on the list!", show_alert=True)
                 return False
             
-            self.logger.info(f"Player {user.username} left - Players remaining: {len(players)} in chat {session.chat_id}")
             await session.set_players(players)
             return True
             
@@ -738,15 +702,8 @@ def setup_logging(self):
                                context: Optional[ContextTypes.DEFAULT_TYPE] = None):
         """Handle full player list and team creation"""
         try:
-            self.logger.info(f"Player list full in chat {session.chat_id} - Creating teams...")
-            
             state = await session.get_state()
             teams = self._create_balanced_teams(players)
-            
-            # Log team composition
-            self.logger.info(f"Teams created for chat {session.chat_id}:")
-            self.logger.info("Team Black: " + ", ".join(p.username for p in teams[0]))
-            self.logger.info("Team White: " + ", ".join(p.username for p in teams[1]))
             
             # Close session
             await session.set_open(False)
@@ -783,8 +740,6 @@ def setup_logging(self):
                     text=teams_message,
                     parse_mode='MarkdownV2'
                 )
-                
-            self.logger.info(f"Teams successfully announced in chat {session.chat_id}")
                 
         except Exception as e:
             self.logger.error(f"Error in _handle_full_list: {e}", exc_info=True)
@@ -880,7 +835,6 @@ def setup_logging(self):
                 "cancel_play"
             )
             if not allowed:
-                self.logger.info(f"Rate limit hit for cancel_play - User: {user.username}, Chat: {chat_id}")
                 await update.message.reply_text(
                     f"Please wait {wait_time:.1f} seconds\\."
                 )
@@ -890,7 +844,6 @@ def setup_logging(self):
             if update.effective_chat.type in ['group', 'supergroup']:
                 member = await context.bot.get_chat_member(chat_id, user.id)
                 if member.status not in ['administrator', 'creator']:
-                    self.logger.warning(f"Unauthorized cancel attempt by {user.username} in chat {chat_id}")
                     await update.message.reply_text(
                         "❌ Only administrators can cancel play lists\\."
                     )
@@ -899,14 +852,12 @@ def setup_logging(self):
             # Cancel session
             session = PlaySession(await self.redis_manager.get_redis(), chat_id)
             if not await session.is_open():
-                self.logger.info(f"Cancel attempt on inactive session by {user.username} in chat {chat_id}")
                 await update.message.reply_text(
                     "No active play list to cancel\\."
                 )
                 return
 
             await session.clear()  # Clear all session data
-            self.logger.info(f"Play cancelled by {user.username} in chat {chat_id}")
             await update.message.reply_text(
                 "⛔️ Play cancelled\\.",
                 parse_mode='MarkdownV2'
