@@ -277,8 +277,8 @@ class FootballPlayBot:
                 'time': '10pm to 11pm',
                 'location': 'Teenage Ground'
             },
-            'Wed': {
-                'day': 'Wednesday Night',
+            'Thurs': {
+                'day': 'Thursday Night',
                 'time': '11pm to 12am',
                 'location': 'Teenage Ground'
             }
