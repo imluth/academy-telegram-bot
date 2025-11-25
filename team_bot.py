@@ -626,13 +626,6 @@ class FootballPlayBot:
             state = await session.get_state()
             players = await session.get_players()
 
-            try:
-                await query.answer()
-            except TelegramError as e:
-                if "Query is too old" in str(e):
-                    return
-                raise
-
             # Process action
             success = False
             action_type = query.data
@@ -643,9 +636,9 @@ class FootballPlayBot:
             elif action_type == 'join_play_plus_one':
                 success = await self._handle_join(session, players, user, True, query, context)
             elif action_type == 'cancel_join':
-                success = await self._handle_leave(session, players, user, query)
+                success = await self._handle_leave(session, players, user, query, context)
             else:
-                await query.answer("Invalid action")
+                await query.answer("Invalid action", show_alert=True)
                 return
 
             if success:
@@ -704,19 +697,36 @@ class FootballPlayBot:
                 join_time=datetime.now()
             )
             players.append(new_player)
-            
+
             # Log the join
             join_type = "+1" if is_plus_one else "regular"
             self.logger.info(f"Player {username} joined ({join_type}) - Total players: {len(players)} in chat {session.chat_id}")
-            
+
             # Update state
             await session.set_players(players)
-            
+
+            # Answer the callback query to remove loading state
+            await query.answer()
+
+            # Send confirmation message to the group
+            if is_plus_one:
+                confirmation_text = f"User @{username} and +1 added to in list ✅"
+            else:
+                confirmation_text = f"User @{username} added to in list ✅"
+
+            try:
+                await context.bot.send_message(
+                    chat_id=session.chat_id,
+                    text=confirmation_text
+                )
+            except TelegramError as e:
+                self.logger.error(f"Failed to send confirmation message: {e}")
+
             # Check if list is full
             if len(players) >= self.max_players:
                 await self._handle_full_list(session, players, query, context)
                 return False
-            
+
             return True
             
         except Exception as e:
@@ -724,21 +734,36 @@ class FootballPlayBot:
             return False
 
     async def _handle_leave(self, session: PlaySession, players: List[Player],
-                          user, query: CallbackQuery) -> bool:
+                          user, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Handle player leave requests"""
         try:
+            username = user.username or f"{user.first_name} {user.last_name or ''}".strip()
             original_count = len(players)
             players = [p for p in players if p.user_id != user.id]
-            
+
             if len(players) == original_count:
                 self.logger.info(f"Leave attempt by non-listed player {user.username} in chat {session.chat_id}")
                 await query.answer("You're not on the list!", show_alert=True)
                 return False
-            
+
             self.logger.info(f"Player {user.username} left - Players remaining: {len(players)} in chat {session.chat_id}")
             await session.set_players(players)
+
+            # Answer the callback query to remove loading state
+            await query.answer()
+
+            # Send confirmation message to the group
+            confirmation_text = f"User @{username} removed from in list ❌"
+            try:
+                await context.bot.send_message(
+                    chat_id=session.chat_id,
+                    text=confirmation_text
+                )
+            except TelegramError as e:
+                self.logger.error(f"Failed to send leave confirmation message: {e}")
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Error in _handle_leave: {e}", exc_info=True)
             return False
