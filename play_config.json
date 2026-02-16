@@ -1,0 +1,37 @@
+{
+  "Sun": {
+    "day": "Sunday Night",
+    "time": "10pm to 11pm",
+    "location": "Teenage Ground"
+  },
+  "Mon": {
+    "day": "Monday Night",
+    "time": "10pm to 11pm",
+    "location": "Teenage Ground"
+  },
+  "Tue": {
+    "day": "Tuesday Night",
+    "time": "10pm to 11pm",
+    "location": "Teenage Ground"
+  },
+  "Wed": {
+    "day": "Wednesday Night",
+    "time": "11pm to 12am",
+    "location": "Teenage Ground"
+  },
+  "Thu": {
+    "day": "Thursday Night",
+    "time": "10pm to 11pm",
+    "location": "Teenage Ground"
+  },
+  "Fri": {
+    "day": "Friday Night",
+    "time": "10pm to 11pm",
+    "location": "Teenage Ground"
+  },
+  "Sat": {
+    "day": "Saturday Night",
+    "time": "10pm to 11pm",
+    "location": "Teenage Ground"
+  }
+}

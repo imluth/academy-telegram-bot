@@ -271,18 +271,7 @@ class FootballPlayBot:
         
         self.setup_logging()
         
-        self.play_details = {
-            'Sat': {
-                'day': 'Saturday Night',
-                'time': '10pm to 11pm',
-                'location': 'Teenage Ground'
-            },
-            'Wed': {
-                'day': 'Wednesday Night',
-                'time': '11pm to 12am',
-                'location': 'Teenage Ground'
-            }
-        }
+        self.play_details = self.load_play_config()
 
     def setup_logging(self):
         """Set up logging configuration with correct timezone"""
@@ -341,6 +330,55 @@ class FootballPlayBot:
             logging.basicConfig(level=logging.INFO)
             self.logger = logging.getLogger('FootballPlayBot')
     
+    def load_play_config(self) -> dict:
+        """Load play schedule configuration from JSON file with fallback to defaults"""
+        default_config = {
+            'Sat': {'day': 'Saturday Night', 'time': '10pm to 11pm', 'location': 'Teenage Ground'},
+            'Wed': {'day': 'Wednesday Night', 'time': '11pm to 12am', 'location': 'Teenage Ground'}
+        }
+        valid_keys = {'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'}
+        required_fields = {'day', 'time', 'location'}
+
+        config_paths = ['/app/play_config.json', 'play_config.json']
+
+        for path in config_paths:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        config = json.load(f)
+
+                    if not isinstance(config, dict):
+                        self.logger.warning(f"Play config at {path} is not a dict. Using defaults.")
+                        return default_config
+
+                    for key, value in config.items():
+                        if key not in valid_keys:
+                            self.logger.warning(f"Invalid day key '{key}' in play config. Using defaults.")
+                            return default_config
+                        if not isinstance(value, dict):
+                            self.logger.warning(f"Config entry for '{key}' is not a dict. Using defaults.")
+                            return default_config
+                        if set(value.keys()) != required_fields:
+                            self.logger.warning(f"Config entry for '{key}' missing required fields. Using defaults.")
+                            return default_config
+                        if not all(isinstance(v, str) for v in value.values()):
+                            self.logger.warning(f"Config entry for '{key}' has non-string values. Using defaults.")
+                            return default_config
+
+                    enabled_days = ', '.join(config.keys())
+                    self.logger.info(f"Play config loaded. Enabled days: {enabled_days}")
+                    return config
+
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"Invalid JSON in play config at {path}: {e}. Using defaults.")
+                    return default_config
+                except Exception as e:
+                    self.logger.warning(f"Error reading play config at {path}: {e}. Using defaults.")
+                    return default_config
+
+        self.logger.warning("No play_config.json found. Using defaults.")
+        return default_config
+
     async def initialize(self):
         """Initialize bot dependencies and connections"""
         try:
@@ -548,10 +586,12 @@ class FootballPlayBot:
 
             # Parse play day
             command_args = update.message.text.lower().split()
-            if len(command_args) != 2 or command_args[1] not in ['wed', 'sat']:
+            valid_days = [d.lower() for d in self.play_details.keys()]
+            if len(command_args) != 2 or command_args[1] not in valid_days:
                 self.logger.info(f"Invalid play day format from {user.username} in chat {chat_id}: {update.message.text}")
+                days_list = "\n".join(f"/play {d}" for d in self.play_details.keys())
                 await update.message.reply_text(
-                    "Please use:\n/play Wed\n/play Sat"
+                    f"Please use:\n{days_list}"
                 )
                 return
 

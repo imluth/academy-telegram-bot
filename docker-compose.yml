@@ -37,6 +37,7 @@ services:
       - TZ=Asia/Male
     volumes:
       - bot_logs:/app/logs
+      - ./play_config.json:/app/play_config.json:ro
     depends_on:
       redis:
         condition: service_healthy
