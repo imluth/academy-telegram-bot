@@ -771,56 +771,65 @@ class FootballPlayBot:
     async def _handle_full_list(self, session: PlaySession, players: List[Player],
                                query: Optional[CallbackQuery] = None,
                                context: Optional[ContextTypes.DEFAULT_TYPE] = None):
-        """Handle full player list and team creation"""
+        """Handle full player list"""
         try:
-            self.logger.info(f"Player list full in chat {session.chat_id} - Creating teams...")
-            
+            self.logger.info(f"Player list full in chat {session.chat_id} - List complete with {len(players)} players")
+
             state = await session.get_state()
-            teams = self._create_balanced_teams(players)
-            
-            # Log team composition
-            self.logger.info(f"Teams created for chat {session.chat_id}:")
-            self.logger.info("Team Black: " + ", ".join(p.username for p in teams[0]))
-            self.logger.info("Team White: " + ", ".join(p.username for p in teams[1]))
-            
+            play_day = state.get('play_day')
+
             # Close session
             await session.set_open(False)
-            
-            # Save final teams
-            await session.set_state({
-                **state,
-                'teams': [
-                    [p.to_dict() for p in team]
-                    for team in teams
-                ]
-            })
-            
-            teams_message = self.format_teams_message(
-                teams,
-                state.get('play_day')
-            )
 
-            # First, update the inline keyboard message
+            # Create final player list message
+            if play_day and play_day in self.play_details:
+                details = self.play_details[play_day]
+
+                # Escape special characters for MarkdownV2
+                day = self.escape_markdown(details['day'])
+                time = self.escape_markdown(details['time'])
+                location = self.escape_markdown(details['location'])
+
+                # Build player list
+                list_lines = [
+                    f"*{day} Play {time}*",
+                    f"{location}\n",
+                    f"*Players \\({len(players)}\\):*"
+                ]
+
+                for i, player in enumerate(players, 1):
+                    player_display = self.escape_markdown(player.username)
+                    if player.is_plus_one:
+                        player_display += " \\(\\+1\\)"
+                    list_lines.append(f"{i}\\. {player_display}")
+
+                list_lines.append("\n✅ Play list is full\\! Team generation in progress\\.\\.\\.")
+
+                final_message = "\n".join(list_lines)
+            else:
+                final_message = "✅ Play list is full\\! Team generation in progress\\.\\.\\."
+
+            # Update the inline keyboard message
             if query and context:
                 try:
                     await query.edit_message_text(
-                        "✅ Play list is full\\! Teams have been created\\.",
+                        "✅ Play list is full\\!",
                         reply_markup=None,
                         parse_mode='MarkdownV2'
                     )
                 except TelegramError as e:
                     self.logger.warning(f"Could not update message: {e}")
 
-            # Then send the teams as a new message
+            # Send the final player list as a new message
             if context:
                 await context.bot.send_message(
                     chat_id=session.chat_id,
-                    text=teams_message,
+                    text=final_message,
                     parse_mode='MarkdownV2'
                 )
-                
-            self.logger.info(f"Teams successfully announced in chat {session.chat_id}")
-                
+
+            self.logger.info(f"Player list completed and announced in chat {session.chat_id}")
+
         except Exception as e:
             self.logger.error(f"Error in _handle_full_list: {e}", exc_info=True)
 
