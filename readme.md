@@ -16,10 +16,29 @@ A robust Telegram bot designed to manage football game scheduling, team organiza
 - Maximum 12 players per game
 - Player registration options:
   - Regular join (✅ In)
-  - Join with plus one (✅+1)
+  - Bring a named guest (✅+1)
   - Leave game (❌ Out)
 - Real-time player list updates
 - Automatic team formation when full
+
+### Named Guests (+1)
+The `+1` button is for bringing a player who isn't in the Telegram group. Because Telegram
+bots cannot open a dialog box, the bot posts a `ForceReply` prompt instead:
+
+1. Tap `✅+1` — the bot asks for a name and opens the reply box for you only
+2. Type the guest's name and send
+3. The list shows `2. Ahmed (+1 by @im_root)` and the bot confirms
+   `User @im_root added Ahmed to in list as +1 ✅`
+
+- The prompt and your typed reply are deleted afterwards, so only the confirmation remains
+  (requires the bot to be a group admin; skipped silently otherwise)
+- Tapping `+1` **reserves** your slot for 2 minutes while you type, so nobody can take it
+- Reply `cancel` to release the slot; unanswered prompts expire on their own
+- Limit of 2 guests per member (`GUEST_LIMIT_PER_USER`)
+- Names are 2–32 characters, must contain a letter or number, and cannot duplicate a name
+  already on the list
+- Pressing `❌ Out` when you have guests asks what to remove: just you, a specific guest,
+  or everyone you added. Only the member who opened that menu can use it.
 
 ### Team Formation
 - Automated balanced team creation

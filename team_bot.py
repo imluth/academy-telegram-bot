@@ -7,8 +7,14 @@ import random
 import sys
 from typing import Dict, List, Optional, Tuple
 import json
-from dataclasses import dataclass, asdict
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from dataclasses import dataclass, asdict, fields
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    CallbackQuery,
+    ForceReply
+)
 from telegram.ext import (
     Application, 
     CommandHandler, 
@@ -27,15 +33,28 @@ import signal
 # Load environment variables
 load_dotenv()
 
+# ================ Guest (+1) Settings ================
+GUEST_LIMIT_PER_USER = 2       # how many named guests one member may bring
+GUEST_PROMPT_TIMEOUT = 120     # seconds a +1 slot stays reserved while the name is typed
+GUEST_NAME_MIN_LEN = 2
+GUEST_NAME_MAX_LEN = 32
+
 # ================ Player Class ================
 @dataclass
 class Player:
-    """Player data structure"""
+    """Player data structure.
+
+    Guests brought via +1 are stored with user_id = 0 so that every lookup keyed on a
+    Telegram user id skips them automatically. Ownership lives in added_by_id instead.
+    """
     username: str
     user_id: int
     rating: float = 5.0
     is_plus_one: bool = False
     join_time: datetime = None
+    guest_id: Optional[str] = None            # set for named guests only
+    added_by_id: Optional[int] = None         # Telegram id of the member who brought them
+    added_by_username: Optional[str] = None   # display name of that member
 
     def to_dict(self):
         return {
@@ -43,14 +62,21 @@ class Player:
             'user_id': self.user_id,
             'rating': self.rating,
             'is_plus_one': self.is_plus_one,
-            'join_time': self.join_time.isoformat() if self.join_time else None
+            'join_time': self.join_time.isoformat() if self.join_time else None,
+            'guest_id': self.guest_id,
+            'added_by_id': self.added_by_id,
+            'added_by_username': self.added_by_username
         }
 
     @classmethod
     def from_dict(cls, data):
+        # Copy first: records stored by older versions lack the guest fields, and unknown
+        # keys are dropped so a future rollback cannot crash on deserialization.
+        data = dict(data)
         if data.get('join_time'):
             data['join_time'] = datetime.fromisoformat(data['join_time'])
-        return cls(**data)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 # ================ Redis Connection Class ================
 class RedisConnection:
@@ -250,12 +276,92 @@ class PlaySession:
         except Exception as e:
             self.logger.error(f"Error setting session open state: {e}")
 
+    # ---- generic JSON blob helpers (same one-key-per-concern style as above) ----
+
+    async def _get_json(self, key: str) -> dict:
+        try:
+            raw = await self.redis.get(key)
+            return json.loads(raw) if raw else {}
+        except Exception as e:
+            self.logger.error(f"Error reading {key}: {e}")
+            return {}
+
+    async def _set_json(self, key: str, value: dict):
+        try:
+            if value:
+                await self.redis.set(key, json.dumps(value), ex=86400)
+            else:
+                await self.redis.delete(key)
+        except Exception as e:
+            self.logger.error(f"Error writing {key}: {e}")
+
+    # ---- pending +1 name prompts (each one reserves a slot while the name is typed) ----
+
+    async def get_pending_plus_ones(self) -> dict:
+        """Live +1 reservations keyed by prompt message id. Expired entries are pruned here."""
+        key = f"{self.key_prefix}:pending_plus_one"
+        pending = await self._get_json(key)
+        now = datetime.now().timestamp()
+        active = {k: v for k, v in pending.items() if v.get('expires_at', 0) > now}
+        if len(active) != len(pending):
+            await self._set_json(key, active)
+        return active
+
+    async def add_pending_plus_one(self, prompt_message_id: int, user_id: int,
+                                   username: str, expires_at: float):
+        pending = await self.get_pending_plus_ones()
+        pending[str(prompt_message_id)] = {
+            'user_id': user_id,
+            'username': username,
+            'expires_at': expires_at
+        }
+        await self._set_json(f"{self.key_prefix}:pending_plus_one", pending)
+
+    async def pop_pending_plus_one(self, prompt_message_id: int) -> Optional[dict]:
+        """Remove and return a reservation, or None if it was already used or expired."""
+        pending = await self.get_pending_plus_ones()
+        entry = pending.pop(str(prompt_message_id), None)
+        if entry is not None:
+            await self._set_json(f"{self.key_prefix}:pending_plus_one", pending)
+        return entry
+
+    async def clear_pending_plus_ones(self):
+        await self._set_json(f"{self.key_prefix}:pending_plus_one", {})
+
+    # ---- pending removal menus ----
+
+    async def _get_pending_removals(self) -> dict:
+        key = f"{self.key_prefix}:pending_removal"
+        pending = await self._get_json(key)
+        now = datetime.now().timestamp()
+        active = {k: v for k, v in pending.items() if v.get('expires_at', 0) > now}
+        if len(active) != len(pending):
+            await self._set_json(key, active)
+        return active
+
+    async def set_pending_removal(self, menu_message_id: int, user_id: int, expires_at: float):
+        pending = await self._get_pending_removals()
+        pending[str(menu_message_id)] = {'user_id': user_id, 'expires_at': expires_at}
+        await self._set_json(f"{self.key_prefix}:pending_removal", pending)
+
+    async def get_pending_removal(self, menu_message_id: int) -> Optional[dict]:
+        return (await self._get_pending_removals()).get(str(menu_message_id))
+
+    async def pop_pending_removal(self, menu_message_id: int) -> Optional[dict]:
+        pending = await self._get_pending_removals()
+        entry = pending.pop(str(menu_message_id), None)
+        if entry is not None:
+            await self._set_json(f"{self.key_prefix}:pending_removal", pending)
+        return entry
+
     async def clear(self):
         try:
             await self.redis.delete(
                 f"{self.key_prefix}:state",
                 f"{self.key_prefix}:players",
-                f"{self.key_prefix}:open"
+                f"{self.key_prefix}:open",
+                f"{self.key_prefix}:pending_plus_one",
+                f"{self.key_prefix}:pending_removal"
             )
         except Exception as e:
             self.logger.error(f"Error clearing session: {e}")
@@ -268,7 +374,9 @@ class FootballPlayBot:
         self.redis_url = redis_url
         self.redis_manager = RedisConnection(redis_url)
         self.retry_delays = defaultdict(int)
-        
+        # Strong refs for fire-and-forget tasks; asyncio only holds weak ones
+        self._background_tasks = set()
+
         self.setup_logging()
         
         self.play_details = self.load_play_config()
@@ -434,7 +542,20 @@ class FootballPlayBot:
             # Add command handlers with correct method names
             app.add_handler(CommandHandler("play", self.handle_start_play))
             app.add_handler(CommandHandler("cancel_play", self.cancel_play))
-            app.add_handler(CallbackQueryHandler(self.handle_play_response))
+            app.add_handler(CallbackQueryHandler(
+                self.handle_play_response,
+                pattern="^(join_play|join_play_plus_one|cancel_join)$"
+            ))
+            app.add_handler(CallbackQueryHandler(
+                self.handle_removal_choice,
+                pattern="^rm_"
+            ))
+            # Guest names arrive as replies to the bot's ForceReply prompt. Replies to the
+            # bot's own messages reach the handler even with group privacy mode enabled.
+            app.add_handler(MessageHandler(
+                filters.REPLY & filters.TEXT & ~filters.COMMAND,
+                self.handle_guest_name_reply
+            ))
             app.add_error_handler(self.error_handler)
             
             await app.initialize()
@@ -484,33 +605,106 @@ class FootballPlayBot:
             text = text.replace(char, f"\\{char}")
         return text
 
+    def _spawn(self, coro):
+        """Run a coroutine in the background, keeping a strong reference to the task"""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    def _display_name(self, user) -> str:
+        """Plain display name for a Telegram user"""
+        return user.username or f"{user.first_name} {user.last_name or ''}".strip()
+
+    def _mention(self, user) -> str:
+        """Mention for plain-text (unparsed) messages"""
+        return f"@{user.username}" if user.username else self._display_name(user)
+
+    def _mention_md(self, user) -> str:
+        """MarkdownV2 inline mention, works whether or not the user has a @username.
+
+        ForceReply(selective=True) targets users mentioned in the message, so the prompt
+        must carry a real mention entity for the reply box to open automatically.
+        """
+        return f"[{self.escape_markdown(self._display_name(user))}](tg://user?id={user.id})"
+
+    async def _delete_message(self, bot, chat_id: int, message_id: int):
+        """Best-effort delete - the bot may not be an admin with delete rights"""
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except TelegramError as e:
+            self.logger.debug(f"Could not delete message {message_id} in {chat_id}: {e}")
+
+    def _new_guest_id(self, players: List[Player]) -> str:
+        """Short id used to target a specific guest from a removal button"""
+        used = {p.guest_id for p in players if p.guest_id}
+        while True:
+            candidate = f"{random.randrange(16 ** 6):06x}"
+            if candidate not in used:
+                return candidate
+
+    def _guests_of(self, players: List[Player], user_id: int) -> List[Player]:
+        return [p for p in players if p.is_plus_one and p.added_by_id == user_id]
+
+    def _no_slot_message(self, player_count: int) -> str:
+        """Tell the difference between a truly full list and one held by a pending +1"""
+        if player_count < self.max_players:
+            return "The last slot is being filled with a +1 name. Try again in a moment."
+        return "Play list is full!"
+
+    def _validate_guest_name(self, raw: str, players: List[Player]):
+        """Normalise and check a typed guest name.
+
+        Returns (name, error) - exactly one of the two is None.
+        """
+        name = " ".join((raw or "").split())
+
+        if len(name) < GUEST_NAME_MIN_LEN:
+            return None, f"That name is too short. Please use at least {GUEST_NAME_MIN_LEN} characters."
+        if len(name) > GUEST_NAME_MAX_LEN:
+            return None, f"That name is too long. Please keep it under {GUEST_NAME_MAX_LEN} characters."
+        if not any(c.isalnum() for c in name):
+            return None, "That name needs at least one letter or number."
+        if any(p.username.casefold() == name.casefold() for p in players):
+            return None, f"{name} is already on the list. Please use a different name."
+
+        return name, None
+
+    def _format_player_line(self, player: Player) -> str:
+        """Render one player entry for MarkdownV2 output"""
+        display = self.escape_markdown(player.username)
+        if player.is_plus_one:
+            if player.added_by_username:
+                display += f" \\(\\+1 by @{self.escape_markdown(player.added_by_username)}\\)"
+            else:
+                # Unnamed +1 stored by an earlier version of the bot
+                display += " \\(\\+1\\)"
+        return display
+
     def format_player_list(self, players: List[Player], play_day: str) -> str:
         """Format the player list with play details"""
         if not play_day or play_day not in self.play_details:
             return "No play day selected"
-        
+
         details = self.play_details[play_day]
-        
+
         # Escape special characters for MarkdownV2
         day = self.escape_markdown(details['day'])
         time = self.escape_markdown(details['time'])
         location = self.escape_markdown(details['location'])
-        
+
         list_lines = [
             f"*{day} Play {time}*",
             f"{location}\n",
             "*Players List:*"
         ]
-        
+
         for i, player in enumerate(players, 1):
-            player_display = self.escape_markdown(player.username)
-            if player.is_plus_one:
-                player_display += " \\(\\+1\\)"
-            list_lines.append(f"{i}\\. {player_display}")
-        
+            list_lines.append(f"{i}\\. {self._format_player_line(player)}")
+
         for i in range(len(players) + 1, self.max_players + 1):
             list_lines.append(f"{i}\\.")
-        
+
         return "\n".join(list_lines)
 
     def format_teams_message(self, teams: List[List[Player]], play_day: str) -> str:
@@ -525,19 +719,8 @@ class FootballPlayBot:
         time = self.escape_markdown(details['time'])
         location = self.escape_markdown(details['location'])
         
-        # Create team lists without f-strings for the escape sequences
-        team_black = []
-        team_white = []
-        
-        for p in teams[0]:
-            player_name = self.escape_markdown(p.username)
-            plus_one = " \\(\\+1\\)" if p.is_plus_one else ""
-            team_black.append(f"\\- {player_name}{plus_one}")
-            
-        for p in teams[1]:
-            player_name = self.escape_markdown(p.username)
-            plus_one = " \\(\\+1\\)" if p.is_plus_one else ""
-            team_white.append(f"\\- {player_name}{plus_one}")
+        team_black = [f"\\- {self._format_player_line(p)}" for p in teams[0]]
+        team_white = [f"\\- {self._format_player_line(p)}" for p in teams[1]]
 
         return (
             f"*{day} Play {time}*\n"
@@ -612,17 +795,23 @@ class FootballPlayBot:
             ]
             
             try:
-                await update.message.reply_text(
+                sent = await update.message.reply_text(
                     self.format_player_list([], play_day),
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='MarkdownV2'
                 )
+                # Remember the list message so flows without a callback query (guest name
+                # replies, removal menus) can still re-render it.
+                await session.set_state({
+                    'play_day': play_day,
+                    'list_message_id': sent.message_id
+                })
                 self.logger.info(
                     f"Play list started for {play_day} in chat {chat_id} by {user.username}"
                 )
             except TelegramError as e:
                 self.logger.error(f"Failed to send initial message: {e}")
-                await session.set_open(False)
+                await session.clear()
                 await update.message.reply_text(
                     "Error starting play list\\. Please try again\\."
                 )
@@ -666,33 +855,41 @@ class FootballPlayBot:
             state = await session.get_state()
             players = await session.get_players()
 
-            # Process action
-            success = False
+            # Sessions started before this version have no stored list message id. Backfill
+            # it here so the guest-name and removal flows can re-render the list.
+            if not state.get('list_message_id'):
+                state['list_message_id'] = query.message.message_id
+                await session.set_state(state)
+
+            # Process action. Handlers return True only when the player list changed and
+            # the list message needs re-rendering.
             action_type = query.data
             self.logger.info(f"User {user.username} attempting action '{action_type}' in chat {chat_id}")
-            
+
             if action_type == 'join_play':
-                success = await self._handle_join(session, players, user, False, query, context)
+                needs_update = await self._handle_join(session, players, user, query, context)
             elif action_type == 'join_play_plus_one':
-                success = await self._handle_join(session, players, user, True, query, context)
+                needs_update = await self._handle_plus_one_request(session, players, user, query, context)
             elif action_type == 'cancel_join':
-                success = await self._handle_leave(session, players, user, query, context)
+                needs_update = await self._handle_leave(session, players, user, query, context)
             else:
                 await query.answer("Invalid action", show_alert=True)
                 return
 
-            if success:
+            if needs_update:
                 self.logger.info(f"Action '{action_type}' successful for user {user.username} in chat {chat_id}")
 
-            # Update message if needed
-            if await self.message_debouncer.should_update(query.message.message_id):
-                await self._update_play_message(
-                    context.bot,
-                    chat_id,
-                    query.message.message_id,
-                    players,
-                    state.get('play_day')
-                )
+            # Skip the re-render once the session has closed, otherwise it would overwrite
+            # the "list is full" message and put the join keyboard back.
+            if needs_update and await session.is_open():
+                if await self.message_debouncer.should_update(query.message.message_id):
+                    await self._update_play_message(
+                        context.bot,
+                        chat_id,
+                        query.message.message_id,
+                        players,
+                        state.get('play_day')
+                    )
 
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after)
@@ -707,109 +904,459 @@ class FootballPlayBot:
             except TelegramError:
                 pass
 
-    async def _handle_join(self, session: PlaySession, players: List[Player],
-                          user, is_plus_one: bool, query: CallbackQuery,
-                          context: ContextTypes.DEFAULT_TYPE) -> bool:
-        """Handle player join requests"""
+    async def _send_confirmation(self, context: ContextTypes.DEFAULT_TYPE,
+                                chat_id: int, text: str):
+        """Post a plain-text confirmation to the group (no parse_mode, so no escaping)"""
         try:
-            if len(players) >= self.max_players:
-                self.logger.info(f"Join attempt rejected - list full. User: {user.username}, Chat: {session.chat_id}")
-                await query.answer("Play list is full!", show_alert=True)
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        except TelegramError as e:
+            self.logger.error(f"Failed to send confirmation message: {e}")
+
+    async def _handle_join(self, session: PlaySession, players: List[Player],
+                          user, query: CallbackQuery,
+                          context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """Handle a regular join request"""
+        try:
+            # Slots held by in-flight +1 name prompts count as taken
+            reserved = len(await session.get_pending_plus_ones())
+            if len(players) + reserved >= self.max_players:
+                self.logger.info(f"Join attempt rejected - no free slot. User: {user.username}, Chat: {session.chat_id}")
+                await query.answer(self._no_slot_message(len(players)), show_alert=True)
                 return False
 
-            username = user.username or f"{user.first_name} {user.last_name or ''}".strip()
-            
-            # Check if already joined
-            existing = next(
-                (p for p in players if p.user_id == user.id and p.is_plus_one == is_plus_one),
-                None
-            )
-            if existing:
+            username = self._display_name(user)
+
+            if any(p.user_id == user.id for p in players):
                 self.logger.info(f"Duplicate join attempt by {username} in chat {session.chat_id}")
                 await query.answer("You're already on the list!", show_alert=True)
                 return False
 
-            # Add player
-            new_player = Player(
+            players.append(Player(
                 username=username,
                 user_id=user.id,
-                is_plus_one=is_plus_one,
                 join_time=datetime.now()
-            )
-            players.append(new_player)
-
-            # Log the join
-            join_type = "+1" if is_plus_one else "regular"
-            self.logger.info(f"Player {username} joined ({join_type}) - Total players: {len(players)} in chat {session.chat_id}")
-
-            # Update state
+            ))
             await session.set_players(players)
 
-            # Answer the callback query to remove loading state
+            self.logger.info(
+                f"Player {username} joined - Total players: {len(players)} in chat {session.chat_id}"
+            )
+
             await query.answer()
+            await self._send_confirmation(
+                context, session.chat_id,
+                f"User {self._mention(user)} added to in list ✅"
+            )
 
-            # Send confirmation message to the group
-            if is_plus_one:
-                confirmation_text = f"User @{username} and +1 added to in list ✅"
-            else:
-                confirmation_text = f"User @{username} added to in list ✅"
-
-            try:
-                await context.bot.send_message(
-                    chat_id=session.chat_id,
-                    text=confirmation_text
-                )
-            except TelegramError as e:
-                self.logger.error(f"Failed to send confirmation message: {e}")
-
-            # Check if list is full
             if len(players) >= self.max_players:
-                await self._handle_full_list(session, players, query, context)
+                await self._handle_full_list(session, players, context)
                 return False
 
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Error in _handle_join: {e}", exc_info=True)
             return False
 
+    async def _handle_plus_one_request(self, session: PlaySession, players: List[Player],
+                                      user, query: CallbackQuery,
+                                      context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """Ask the member for the guest's name and reserve a slot while they type.
+
+        Telegram has no dialog box for bots, so this posts a ForceReply prompt: the reply
+        box opens for the mentioned member, and their reply comes back to
+        handle_guest_name_reply. Always returns False - the player list is unchanged here.
+        """
+        try:
+            pending = await session.get_pending_plus_ones()
+
+            if any(entry['user_id'] == user.id for entry in pending.values()):
+                await query.answer(
+                    "You already have a name request open. Please reply to it first.",
+                    show_alert=True
+                )
+                return False
+
+            owned = len(self._guests_of(players, user.id))
+            if owned >= GUEST_LIMIT_PER_USER:
+                await query.answer(
+                    f"You can only bring {GUEST_LIMIT_PER_USER} guests.",
+                    show_alert=True
+                )
+                return False
+
+            if len(players) + len(pending) >= self.max_players:
+                await query.answer(self._no_slot_message(len(players)), show_alert=True)
+                return False
+
+            await query.answer()
+
+            prompt = await context.bot.send_message(
+                chat_id=session.chat_id,
+                text=(
+                    f"{self._mention_md(user)}, reply to this message with the name of the "
+                    f"player you are bringing\\.\n"
+                    f"Your slot is held for {GUEST_PROMPT_TIMEOUT // 60} minutes\\. "
+                    f"Reply *cancel* to drop it\\."
+                ),
+                reply_markup=ForceReply(
+                    selective=True,
+                    input_field_placeholder="Guest player name"
+                ),
+                parse_mode='MarkdownV2'
+            )
+
+            expires_at = datetime.now().timestamp() + GUEST_PROMPT_TIMEOUT
+            await session.add_pending_plus_one(
+                prompt.message_id, user.id, self._display_name(user), expires_at
+            )
+            self._spawn(self._expire_plus_one_prompt(
+                session.chat_id, prompt.message_id, context, GUEST_PROMPT_TIMEOUT
+            ))
+
+            self.logger.info(
+                f"+1 name prompt {prompt.message_id} opened by {user.username} in chat {session.chat_id}"
+            )
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Error in _handle_plus_one_request: {e}", exc_info=True)
+            try:
+                await query.answer("Could not start the +1 request. Please try again.", show_alert=True)
+            except TelegramError:
+                pass
+            return False
+
+    async def _expire_plus_one_prompt(self, chat_id: int, prompt_message_id: int,
+                                     context: ContextTypes.DEFAULT_TYPE, delay: float):
+        """Release a reserved slot whose prompt was never answered.
+
+        Best-effort only: PTB is installed without the job-queue extra, and a container
+        restart drops these tasks. The expires_at stamp in Redis remains authoritative and
+        is pruned lazily on the next read.
+        """
+        try:
+            await asyncio.sleep(delay)
+            session = PlaySession(await self.redis_manager.get_redis(), chat_id)
+            if await session.pop_pending_plus_one(prompt_message_id) is None:
+                return  # already answered or cancelled
+            await self._delete_message(context.bot, chat_id, prompt_message_id)
+            self.logger.info(f"+1 prompt {prompt_message_id} expired in chat {chat_id}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.error(f"Error expiring +1 prompt: {e}", exc_info=True)
+
+    async def _reissue_guest_prompt(self, session: PlaySession, user, context: ContextTypes.DEFAULT_TYPE,
+                                   old_prompt_id: int, reason: str, expires_at: float) -> bool:
+        """Replace a prompt after a rejected name so the reply box opens again.
+
+        The original expiry is carried over, so retries cannot extend the held slot.
+        """
+        try:
+            remaining = expires_at - datetime.now().timestamp()
+            if remaining <= 0:
+                await session.pop_pending_plus_one(old_prompt_id)
+                await self._delete_message(context.bot, session.chat_id, old_prompt_id)
+                return False
+
+            prompt = await context.bot.send_message(
+                chat_id=session.chat_id,
+                text=(
+                    f"{self._mention_md(user)}, {self.escape_markdown(reason)}\n"
+                    f"Reply to this message with the guest's name, or *cancel* to drop the slot\\."
+                ),
+                reply_markup=ForceReply(
+                    selective=True,
+                    input_field_placeholder="Guest player name"
+                ),
+                parse_mode='MarkdownV2'
+            )
+
+            await session.pop_pending_plus_one(old_prompt_id)
+            await self._delete_message(context.bot, session.chat_id, old_prompt_id)
+            await session.add_pending_plus_one(
+                prompt.message_id, user.id, self._display_name(user), expires_at
+            )
+            self._spawn(self._expire_plus_one_prompt(
+                session.chat_id, prompt.message_id, context, remaining
+            ))
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error reissuing guest prompt: {e}", exc_info=True)
+            return False
+
+    async def handle_guest_name_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Capture the guest name typed in reply to a +1 prompt"""
+        message = update.message
+        if not message or not message.reply_to_message:
+            return
+
+        chat_id = message.chat_id
+        user = update.effective_user
+        prompt_id = message.reply_to_message.message_id
+
+        try:
+            session = PlaySession(await self.redis_manager.get_redis(), chat_id)
+            entry = (await session.get_pending_plus_ones()).get(str(prompt_id))
+
+            # Any other reply in the group is none of our business
+            if entry is None:
+                return
+
+            # Throttle before answering, so replying to someone else's prompt is rate limited
+            allowed, wait_time = await self.rate_limiter.acquire(user.id, "guest_name")
+            if not allowed:
+                await message.reply_text(f"Please wait {wait_time:.1f} seconds.")
+                return
+
+            if entry['user_id'] != user.id:
+                await message.reply_text("That name request isn't yours.")
+                return
+
+            if not await session.is_open():
+                await session.pop_pending_plus_one(prompt_id)
+                await self._delete_message(context.bot, chat_id, prompt_id)
+                await message.reply_text("This play list is no longer active.")
+                return
+
+            # Explicit cancellation
+            if (message.text or "").strip().casefold() == "cancel":
+                await session.pop_pending_plus_one(prompt_id)
+                await self._delete_message(context.bot, chat_id, prompt_id)
+                await self._delete_message(context.bot, chat_id, message.message_id)
+                await self._send_confirmation(
+                    context, chat_id,
+                    f"User {self._mention(user)} cancelled the +1 request."
+                )
+                self.logger.info(f"+1 request cancelled by {user.username} in chat {chat_id}")
+                return
+
+            players = await session.get_players()
+            name, error = self._validate_guest_name(message.text, players)
+
+            if error:
+                await self._delete_message(context.bot, chat_id, message.message_id)
+                reissued = await self._reissue_guest_prompt(
+                    session, user, context, prompt_id, error, entry['expires_at']
+                )
+                if not reissued:
+                    await self._send_confirmation(
+                        context, chat_id,
+                        f"{self._mention(user)}: {error} Your +1 slot was released - tap ✅+1 to try again."
+                    )
+                return
+
+            # Re-check capacity, ignoring the slot this request is holding
+            others_pending = sum(
+                1 for key in (await session.get_pending_plus_ones()) if key != str(prompt_id)
+            )
+            if len(players) + others_pending >= self.max_players:
+                await session.pop_pending_plus_one(prompt_id)
+                await self._delete_message(context.bot, chat_id, prompt_id)
+                await message.reply_text("Sorry, the play list filled up.")
+                return
+
+            players.append(Player(
+                username=name,
+                user_id=0,
+                is_plus_one=True,
+                join_time=datetime.now(),
+                guest_id=self._new_guest_id(players),
+                added_by_id=user.id,
+                added_by_username=self._display_name(user)
+            ))
+            await session.set_players(players)
+            await session.pop_pending_plus_one(prompt_id)
+
+            await self._delete_message(context.bot, chat_id, prompt_id)
+            await self._delete_message(context.bot, chat_id, message.message_id)
+
+            self.logger.info(
+                f"Guest '{name}' added by {user.username} - Total players: {len(players)} in chat {chat_id}"
+            )
+            await self._send_confirmation(
+                context, chat_id,
+                f"User {self._mention(user)} added {name} to in list as +1 ✅"
+            )
+
+            if len(players) >= self.max_players:
+                await self._handle_full_list(session, players, context)
+            else:
+                await self._refresh_list_message(session, players, context)
+
+        except Exception as e:
+            self.logger.error(f"Error in handle_guest_name_reply: {e}", exc_info=True)
+            try:
+                await message.reply_text("An error occurred. Please try again.")
+            except TelegramError:
+                pass
+
+    async def _discard_open_prompts(self, session: PlaySession,
+                                   context: ContextTypes.DEFAULT_TYPE):
+        """Remove ForceReply prompts left hanging when a session ends"""
+        for prompt_id in await session.get_pending_plus_ones():
+            try:
+                await self._delete_message(context.bot, session.chat_id, int(prompt_id))
+            except (TypeError, ValueError):
+                continue
+
+    async def _refresh_list_message(self, session: PlaySession, players: List[Player],
+                                   context: ContextTypes.DEFAULT_TYPE):
+        """Re-render the play list message from stored state (no callback query available)"""
+        state = await session.get_state()
+        list_message_id = state.get('list_message_id')
+        if not list_message_id:
+            return
+        await self._update_play_message(
+            context.bot, session.chat_id, list_message_id, players, state.get('play_day')
+        )
+
     async def _handle_leave(self, session: PlaySession, players: List[Player],
                           user, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> bool:
-        """Handle player leave requests"""
+        """Handle leave requests, asking what to remove when the member brought guests"""
         try:
-            username = user.username or f"{user.first_name} {user.last_name or ''}".strip()
-            original_count = len(players)
-            players = [p for p in players if p.user_id != user.id]
+            on_list = any(p.user_id == user.id for p in players)
+            guests = self._guests_of(players, user.id)
 
-            if len(players) == original_count:
+            if not on_list and not guests:
                 self.logger.info(f"Leave attempt by non-listed player {user.username} in chat {session.chat_id}")
                 await query.answer("You're not on the list!", show_alert=True)
                 return False
 
-            self.logger.info(f"Player {user.username} left - Players remaining: {len(players)} in chat {session.chat_id}")
-            await session.set_players(players)
+            if guests:
+                await query.answer()
+                await self._send_removal_menu(session, user, on_list, guests, context)
+                return False
 
-            # Answer the callback query to remove loading state
             await query.answer()
 
-            # Send confirmation message to the group
-            confirmation_text = f"User @{username} removed from in list ❌"
-            try:
-                await context.bot.send_message(
-                    chat_id=session.chat_id,
-                    text=confirmation_text
-                )
-            except TelegramError as e:
-                self.logger.error(f"Failed to send leave confirmation message: {e}")
+            # Mutate in place so the caller re-renders the updated list
+            players[:] = [p for p in players if p.user_id != user.id]
+            await session.set_players(players)
 
+            self.logger.info(
+                f"Player {user.username} left - Players remaining: {len(players)} in chat {session.chat_id}"
+            )
+            await self._send_confirmation(
+                context, session.chat_id,
+                f"User {self._mention(user)} removed from in list ❌"
+            )
             return True
 
         except Exception as e:
             self.logger.error(f"Error in _handle_leave: {e}", exc_info=True)
             return False
 
+    async def _send_removal_menu(self, session: PlaySession, user, on_list: bool,
+                                guests: List[Player], context: ContextTypes.DEFAULT_TYPE):
+        """Offer the member a choice of what to remove. Options match what they actually own."""
+        try:
+            buttons = []
+            if on_list:
+                buttons.append([InlineKeyboardButton("Just me", callback_data='rm_self')])
+            for guest in guests:
+                label = guest.username if len(guest.username) <= 20 else f"{guest.username[:19]}…"
+                buttons.append([InlineKeyboardButton(label, callback_data=f"rm_guest:{guest.guest_id}")])
+            if on_list or len(guests) > 1:
+                buttons.append([InlineKeyboardButton("Everyone", callback_data='rm_all')])
+            buttons.append([InlineKeyboardButton("✖️ Keep everyone", callback_data='rm_cancel')])
+
+            menu = await context.bot.send_message(
+                chat_id=session.chat_id,
+                text=f"{self._mention_md(user)}, who should be removed?",
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode='MarkdownV2'
+            )
+
+            # Ownership is stored server-side so nobody else can act on this menu
+            await session.set_pending_removal(
+                menu.message_id, user.id, datetime.now().timestamp() + 300
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error in _send_removal_menu: {e}", exc_info=True)
+
+    async def handle_removal_choice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Apply the member's choice from the removal menu"""
+        query = update.callback_query
+        user = query.from_user
+        chat_id = query.message.chat_id
+        menu_id = query.message.message_id
+
+        try:
+            session = PlaySession(await self.redis_manager.get_redis(), chat_id)
+            entry = await session.get_pending_removal(menu_id)
+
+            if entry is None:
+                await query.answer("This menu has expired.", show_alert=True)
+                await self._delete_message(context.bot, chat_id, menu_id)
+                return
+
+            if entry['user_id'] != user.id:
+                await query.answer("This menu isn't yours.", show_alert=True)
+                return
+
+            allowed, wait_time = await self.rate_limiter.acquire(user.id)
+            if not allowed:
+                await query.answer(f"Please wait {wait_time:.1f} seconds.", show_alert=True)
+                return
+
+            await query.answer()
+            await session.pop_pending_removal(menu_id)
+            await self._delete_message(context.bot, chat_id, menu_id)
+
+            choice = query.data
+            if choice == 'rm_cancel':
+                return
+
+            if not await session.is_open():
+                await self._send_confirmation(context, chat_id, "This play list is no longer active.")
+                return
+
+            players = await session.get_players()
+
+            if choice == 'rm_self':
+                def targeted(p):
+                    return p.user_id == user.id
+            elif choice == 'rm_all':
+                def targeted(p):
+                    return p.user_id == user.id or (p.is_plus_one and p.added_by_id == user.id)
+            elif choice.startswith('rm_guest:'):
+                guest_id = choice.split(':', 1)[1]
+                def targeted(p):
+                    return p.guest_id == guest_id and p.added_by_id == user.id
+            else:
+                return
+
+            removed = [p.username for p in players if targeted(p)]
+            if not removed:
+                await self._send_confirmation(
+                    context, chat_id, "Nothing to remove - the list already changed."
+                )
+                return
+
+            players = [p for p in players if not targeted(p)]
+            await session.set_players(players)
+
+            self.logger.info(
+                f"{user.username} removed {removed} - Players remaining: {len(players)} in chat {chat_id}"
+            )
+            await self._send_confirmation(
+                context, chat_id,
+                f"Removed from in list ❌: {', '.join(removed)}"
+            )
+            await self._refresh_list_message(session, players, context)
+
+        except Exception as e:
+            self.logger.error(f"Error in handle_removal_choice: {e}", exc_info=True)
+            try:
+                await query.answer("An error occurred. Please try again.", show_alert=True)
+            except TelegramError:
+                pass
+
     async def _handle_full_list(self, session: PlaySession, players: List[Player],
-                               query: Optional[CallbackQuery] = None,
                                context: Optional[ContextTypes.DEFAULT_TYPE] = None):
         """Handle full player list"""
         try:
@@ -817,9 +1364,13 @@ class FootballPlayBot:
 
             state = await session.get_state()
             play_day = state.get('play_day')
+            list_message_id = state.get('list_message_id')
 
-            # Close session
+            # Close session and drop any slot still reserved by an unanswered +1 prompt
             await session.set_open(False)
+            if context:
+                await self._discard_open_prompts(session, context)
+            await session.clear_pending_plus_ones()
 
             # Create final player list message
             if play_day and play_day in self.play_details:
@@ -838,10 +1389,7 @@ class FootballPlayBot:
                 ]
 
                 for i, player in enumerate(players, 1):
-                    player_display = self.escape_markdown(player.username)
-                    if player.is_plus_one:
-                        player_display += " \\(\\+1\\)"
-                    list_lines.append(f"{i}\\. {player_display}")
+                    list_lines.append(f"{i}\\. {self._format_player_line(player)}")
 
                 list_lines.append("\n✅ Play list is full\\! Team generation in progress\\.\\.\\.")
 
@@ -849,11 +1397,13 @@ class FootballPlayBot:
             else:
                 final_message = "✅ Play list is full\\! Team generation in progress\\.\\.\\."
 
-            # Update the inline keyboard message
-            if query and context:
+            # Close out the list message and strip its keyboard
+            if context and list_message_id:
                 try:
-                    await query.edit_message_text(
-                        "✅ Play list is full\\!",
+                    await context.bot.edit_message_text(
+                        chat_id=session.chat_id,
+                        message_id=list_message_id,
+                        text="✅ Play list is full\\!",
                         reply_markup=None,
                         parse_mode='MarkdownV2'
                     )
@@ -989,6 +1539,7 @@ class FootballPlayBot:
                 )
                 return
 
+            await self._discard_open_prompts(session, context)
             await session.clear()  # Clear all session data
             self.logger.info(f"Play cancelled by {user.username} in chat {chat_id}")
             await update.message.reply_text(
