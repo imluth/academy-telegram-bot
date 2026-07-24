@@ -57,16 +57,20 @@ class Player:
     added_by_username: Optional[str] = None   # display name of that member
 
     def to_dict(self):
-        return {
+        data = {
             'username': self.username,
             'user_id': self.user_id,
             'rating': self.rating,
             'is_plus_one': self.is_plus_one,
-            'join_time': self.join_time.isoformat() if self.join_time else None,
-            'guest_id': self.guest_id,
-            'added_by_id': self.added_by_id,
-            'added_by_username': self.added_by_username
+            'join_time': self.join_time.isoformat() if self.join_time else None
         }
+        # Only guests carry these. Omitting them for regular players keeps those records
+        # loadable by older versions, which pass the dict straight into the constructor.
+        for key in ('guest_id', 'added_by_id', 'added_by_username'):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        return data
 
     @classmethod
     def from_dict(cls, data):
