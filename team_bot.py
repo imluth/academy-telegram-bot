@@ -34,7 +34,7 @@ import signal
 load_dotenv()
 
 # ================ Guest (+1) Settings ================
-GUEST_LIMIT_PER_USER = 2       # how many named guests one member may bring
+GUEST_LIMIT_PER_USER = 2       # how many named guests one member may bring (admins/owner: unlimited)
 GUEST_PROMPT_TIMEOUT = 120     # seconds a +1 slot stays reserved while the name is typed
 GUEST_NAME_MIN_LEN = 2
 GUEST_NAME_MAX_LEN = 32
@@ -650,6 +650,19 @@ class FootballPlayBot:
     def _guests_of(self, players: List[Player], user_id: int) -> List[Player]:
         return [p for p in players if p.is_plus_one and p.added_by_id == user_id]
 
+    async def _is_group_admin(self, bot, chat_id: int, user_id: int) -> bool:
+        """True when the user is an administrator or the owner of the group.
+
+        Any lookup failure counts as "not an admin", so the caller falls back to the
+        rules that apply to regular members.
+        """
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+            return member.status in ['administrator', 'creator']
+        except TelegramError as e:
+            self.logger.debug(f"Could not check admin status of {user_id} in {chat_id}: {e}")
+            return False
+
     def _no_slot_message(self, player_count: int) -> str:
         """Tell the difference between a truly full list and one held by a pending +1"""
         if player_count < self.max_players:
@@ -981,13 +994,20 @@ class FootballPlayBot:
                 )
                 return False
 
+            # Regular members may bring GUEST_LIMIT_PER_USER guests. Group admins and the
+            # owner are exempt and can keep adding guests until the list is full.
             owned = len(self._guests_of(players, user.id))
             if owned >= GUEST_LIMIT_PER_USER:
-                await query.answer(
-                    f"You can only bring {GUEST_LIMIT_PER_USER} guests.",
-                    show_alert=True
-                )
-                return False
+                if await self._is_group_admin(context.bot, session.chat_id, user.id):
+                    self.logger.info(
+                        f"Admin {user.username} bypassing guest limit ({owned} guests) in chat {session.chat_id}"
+                    )
+                else:
+                    await query.answer(
+                        f"You can only bring {GUEST_LIMIT_PER_USER} guests.",
+                        show_alert=True
+                    )
+                    return False
 
             if len(players) + len(pending) >= self.max_players:
                 await query.answer(self._no_slot_message(len(players)), show_alert=True)

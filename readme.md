@@ -34,7 +34,8 @@ bots cannot open a dialog box, the bot posts a `ForceReply` prompt instead:
   (requires the bot to be a group admin; skipped silently otherwise)
 - Tapping `+1` **reserves** your slot for 2 minutes while you type, so nobody can take it
 - Reply `cancel` to release the slot; unanswered prompts expire on their own
-- Limit of 2 guests per member (`GUEST_LIMIT_PER_USER`)
+- Limit of 2 guests per member (`GUEST_LIMIT_PER_USER`). Group administrators and the group
+  owner are exempt and can keep adding guests until the list is full
 - Names are 2–32 characters, must contain a letter or number, and cannot duplicate a name
   already on the list
 - Pressing `❌ Out` when you have guests asks what to remove: just you, a specific guest,
